@@ -1,0 +1,36 @@
+{
+  "port": 5409,
+  "storageRoot": "uploads",
+  "auth": {
+    "password": "picmi-node"
+  },
+  "ipWhitelist": [],
+  "ipHeader": "",
+  "db": {
+    "type": "sqlite",
+    "sqlite": {
+      "file": "data/sqlite.db"
+    },
+    "mysql": {
+      "host": "",
+      "port": 3306,
+      "user": "",
+      "password": "",
+      "database": ""
+    },
+    "postgresql": {
+      "host": "",
+      "port": 5432,
+      "user": "",
+      "password": "",
+      "database": ""
+    },
+    "supabase": {
+      "url": "",
+      "key": ""
+    }
+  },
+  "storage": {
+    "type": "local"
+  }
+}

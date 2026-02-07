@@ -1,0 +1,19 @@
+{
+  "name": "picmi-node",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.1",
+    "busboy": "^1.6.0",
+    "express": "^4.19.2",
+    "mysql2": "^3.11.5",
+    "pg": "^8.13.1",
+    "sqlite3": "^5.1.7"
+  }
+}

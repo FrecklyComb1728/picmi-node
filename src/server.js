@@ -44,9 +44,10 @@ const decodeBase64 = (input, maxBytes) => {
   const raw = String(input || '').trim()
   if (!raw) return null
   const parts = raw.split(',')
-  const data = (parts.length > 1 ? parts.slice(1).join(',') : raw).trim().replace(/\s+/g, '')
+  let data = (parts.length > 1 ? parts.slice(1).join(',') : raw).trim().replace(/\s+/g, '')
   if (!data) return null
-  if (data.length % 4 !== 0) return null
+  data = data.replace(/-/g, '+').replace(/_/g, '/')
+  if (data.length % 4 !== 0) data = data.padEnd(data.length + (4 - (data.length % 4)), '=')
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return null
   const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
   const estimatedBytes = Math.max(0, Math.floor(data.length * 3 / 4) - padding)

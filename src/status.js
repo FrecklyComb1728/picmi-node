@@ -82,10 +82,11 @@ const buildSystemTrafficTracker = () => {
   }
 
   update().catch(() => {})
-  setInterval(() => {
+  const timer = setInterval(() => {
     update().catch(() => {})
   }, 1000)
-  return { sample: () => ({ in: state.inSpeed, out: state.outSpeed, available: state.available }) }
+  const close = () => clearInterval(timer)
+  return { sample: () => ({ in: state.inSpeed, out: state.outSpeed, available: state.available }), close }
 }
 
 const buildTrafficTracker = () => {
@@ -118,7 +119,10 @@ const buildTrafficTracker = () => {
     state.lastOut = state.outBytes
     return { in: inSpeed, out: outSpeed }
   }
-  return { middleware, sample, systemSample: system.sample }
+  const close = () => {
+    if (system && typeof system.close === 'function') system.close()
+  }
+  return { middleware, sample, systemSample: system.sample, close }
 }
 
 const getDiskInfo = (target) => {

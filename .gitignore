@@ -1,3 +1,5 @@
 data/sqlite.db
+data/config.json
+/config.json
 /node_modules
 /uploads

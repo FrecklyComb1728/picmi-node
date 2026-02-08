@@ -47,11 +47,11 @@ curl.exe http://localhost:5409/api/health
 中文说明：使用密码访问需要认证的接口
 
 ```bash
-curl.exe -H "x-picmi-node-password: picmi-node" http://localhost:5409/api/status
+curl.exe -H "x-picmi-node-password: <password>" http://localhost:5409/api/status
 ```
 
 English: Call an authenticated endpoint
 
 ```bash
-curl.exe -H "x-picmi-node-password: picmi-node" http://localhost:5409/api/status
+curl.exe -H "x-picmi-node-password: <password>" http://localhost:5409/api/status
 ```

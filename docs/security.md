@@ -2,13 +2,13 @@
 
 ## 认证机制
 
-当 `auth.password` 非空时，需要进行认证。以下方式任一满足即可：
+当 `auth.enabled=true` 且 `auth.password` 已配置时，需要进行认证。以下方式任一满足即可：
 
 - `x-node-password` 请求头
 - `x-picmi-node-password` 请求头
 - `Authorization: Bearer <password>`
 
-若 `auth.password` 为空字符串，则跳过认证。
+当 `auth.enabled=false` 时跳过认证。
 
 ## 公开路径
 
@@ -29,6 +29,12 @@
 
 可通过 `ipHeader` 指定读取客户端 IP 的请求头，例如 `x-forwarded-for`。若该头存在且包含多个 IP，仅取第一个。
 
+仅当 `trustProxy=true` 时才会读取 `ipHeader` 指定的请求头，否则将使用 TCP 连接的远端 IP。
+
 ## 路径安全
 
 所有路径经规范化处理并进行路径穿越检测，防止访问 `storageRoot` 之外的文件。
+
+## 上传目录安全
+
+`/uploads` 静态目录默认添加 `X-Content-Type-Options: nosniff` 与沙箱 CSP 头，降低上传 HTML/SVG 等内容造成脚本执行的风险。

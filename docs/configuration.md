@@ -8,6 +8,15 @@
 
 配置读取逻辑会对默认配置与用户配置进行深度合并，未提供字段将回退为默认值。
 
+支持通过环境变量覆盖部分配置：
+
+- `PICMI_NODE_PASSWORD`
+- `PICMI_NODE_AUTH_ENABLED`
+- `PICMI_NODE_TRUST_PROXY`
+- `PICMI_NODE_JSON_BODY_LIMIT`
+- `PICMI_NODE_UPLOAD_BASE64_BYTES`
+- `PICMI_NODE_UPLOAD_FILE_BYTES`
+
 ## 完整配置结构
 
 ```json
@@ -15,10 +24,18 @@
   "port": 5409,
   "storageRoot": "uploads",
   "auth": {
-    "password": "picmi-node"
+    "enabled": true,
+    "password": ""
   },
   "ipWhitelist": [],
   "ipHeader": "",
+  "trustProxy": false,
+  "limits": {
+    "jsonBody": "10mb",
+    "uploadBase64Bytes": 20971520,
+    "uploadFileBytes": 104857600,
+    "uploadFields": 50
+  },
   "db": {
     "type": "sqlite",
     "sqlite": {
@@ -61,7 +78,13 @@
 
 ### auth.password
 
-请求认证密码。若为空字符串，将跳过认证校验。
+请求认证密码。`auth.enabled=true` 时必须配置。
+
+生产环境下若未配置密码，启动会直接退出；开发模式会自动关闭认证。
+
+### auth.enabled
+
+是否开启认证。为 `false` 时将跳过认证校验。
 
 ### ipWhitelist
 
@@ -76,6 +99,19 @@ IP 白名单数组，支持以下格式：
 ### ipHeader
 
 从指定请求头读取客户端 IP，例如反向代理场景可设置为 `x-forwarded-for`。
+
+### trustProxy
+
+是否信任反向代理头部。仅当 `trustProxy=true` 时才会读取 `ipHeader` 指定的请求头作为客户端 IP。
+
+### limits
+
+请求体与上传限制：
+
+- `limits.jsonBody`：JSON 请求体大小限制（如 `10mb`）
+- `limits.uploadBase64Bytes`：base64 上传最大字节数
+- `limits.uploadFileBytes`：multipart 上传单文件最大字节数
+- `limits.uploadFields`：multipart 字段数量上限
 
 ### db
 

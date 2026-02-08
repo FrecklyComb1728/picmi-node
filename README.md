@@ -60,6 +60,8 @@ pnpm install && pnpm start
 
 配置文件优先级：项目根目录 config.json 优先于 data/config.json。首次启动会自动创建 data/config.json 并写入默认配置。
 
+建议从 `data/config.json` 复制生成配置文件，并确保配置文件不被提交到仓库。
+
 默认配置示例：
 
 ```json
@@ -67,10 +69,18 @@ pnpm install && pnpm start
   "port": 5409,
   "storageRoot": "uploads",
   "auth": {
-    "password": "picmi-node"
+    "enabled": true,
+    "password": ""
   },
   "ipWhitelist": [],
   "ipHeader": "",
+  "trustProxy": false,
+  "limits": {
+    "jsonBody": "10mb",
+    "uploadBase64Bytes": 20971520,
+    "uploadFileBytes": 104857600,
+    "uploadFields": 50
+  },
   "db": {
     "type": "sqlite",
     "sqlite": {
@@ -105,9 +115,12 @@ pnpm install && pnpm start
 
 - port：服务监听端口
 - storageRoot：存储根目录（相对项目根目录）
-- auth.password：访问密码，为空时不启用认证
+- auth.enabled：是否启用认证
+- auth.password：访问密码（启用认证时必填）
 - ipWhitelist：IP 白名单，可填单个 IP 或 CIDR
 - ipHeader：从指定请求头读取客户端 IP（如反向代理场景）
+- trustProxy：是否信任反向代理头部（启用后才会读取 ipHeader）
+- limits：请求体与上传限制
 - db：公开路径的元数据存储后端配置
 - storage.type：当前仅支持 local
 

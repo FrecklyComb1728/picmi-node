@@ -2,10 +2,18 @@
   "port": 5409,
   "storageRoot": "uploads",
   "auth": {
+    "enabled": true,
     "password": "picmi-node"
   },
   "ipWhitelist": [],
   "ipHeader": "",
+  "trustProxy": false,
+  "limits": {
+    "jsonBody": "1gb",
+    "uploadBase64Bytes": 1073741824,
+    "uploadFileBytes": 1073741824,
+    "uploadFields": 1024
+  },
   "db": {
     "type": "sqlite",
     "sqlite": {

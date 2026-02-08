@@ -49,7 +49,7 @@
 
 需要认证。
 
-响应 data 字段详见 [operations.md](file:///e:/Github/picmi-node/docs/operations.md)。
+响应 data 字段详见 [operations.md](/docs/operations.md)。
 
 ### GET /api/status/stream
 
@@ -235,11 +235,5 @@ data: {"mode":"local","time":"2026-02-08T00:00:00.000Z",...}
 中文说明：使用 curl 上传文件
 
 ```bash
-curl.exe -H "x-picmi-node-password: picmi-node" -F "file=@a.png" -F "path=/" -F "override=0" http://localhost:5409/api/images/upload
-```
-
-English: Upload file using curl
-
-```bash
-curl.exe -H "x-picmi-node-password: picmi-node" -F "file=@a.png" -F "path=/" -F "override=0" http://localhost:5409/api/images/upload
+curl.exe -H "x-picmi-node-password: <password>" -F "file=@a.png" -F "path=/" -F "override=0" http://localhost:5409/api/images/upload
 ```

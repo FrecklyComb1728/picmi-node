@@ -70,8 +70,9 @@ const matchIp = (ip, rule) => {
 
 const getClientIp = (req, config) => {
   const header = String(config.ipHeader || '').trim().toLowerCase()
+  const trustProxy = config.trustProxy === true
   let ip = ''
-  if (header) {
+  if (trustProxy && header) {
     const raw = req.headers[header]
     if (Array.isArray(raw)) ip = raw[0]
     else if (raw) ip = String(raw).split(',')[0].trim()
@@ -99,8 +100,13 @@ const readAuthToken = (req) => {
 }
 
 const requireAuth = (req, res, config, allow) => {
-  const password = String(config.auth?.password || '')
-  if (!password) return true
+  const enabled = config.auth?.enabled !== false
+  if (!enabled) return true
+  const password = String(config.auth?.password || '').trim()
+  if (!password) {
+    res.status(500).json({ code: 50001, message: '未配置认证密码', data: null })
+    return false
+  }
   if (allow) return true
   const token = readAuthToken(req)
   if (token && safeEqual(token, password)) return true

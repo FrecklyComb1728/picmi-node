@@ -11,33 +11,42 @@ const getNodeSqlite = () => {
   }
 }
 
+const buildMysqlPool = (config) => {
+  const mysql = require('mysql2/promise')
+  return mysql.createPool({
+    host: config.db.mysql?.host,
+    port: config.db.mysql?.port || 3306,
+    user: config.db.mysql?.user,
+    password: config.db.mysql?.password,
+    database: config.db.mysql?.database,
+    waitForConnections: true,
+    connectionLimit: 10
+  })
+}
+
+const buildPostgresqlPool = (config) => {
+  const { Pool } = require('pg')
+  return new Pool({
+    host: config.db.postgresql?.host,
+    port: config.db.postgresql?.port || 5432,
+    user: config.db.postgresql?.user,
+    password: config.db.postgresql?.password,
+    database: config.db.postgresql?.database
+  })
+}
+
 const checkDatabase = async (config) => {
 
   const type = String(config.db?.type || 'sqlite')
+  if (type === 'memory') return
   if (type === 'mysql') {
-    const mysql = require('mysql2/promise')
-    const pool = mysql.createPool({
-      host: config.db.mysql?.host,
-      port: config.db.mysql?.port || 3306,
-      user: config.db.mysql?.user,
-      password: config.db.mysql?.password,
-      database: config.db.mysql?.database,
-      waitForConnections: true,
-      connectionLimit: 10
-    })
+    const pool = buildMysqlPool(config)
     await pool.query('SELECT 1')
     await pool.end()
     return
   }
   if (type === 'postgresql') {
-    const { Pool } = require('pg')
-    const pool = new Pool({
-      host: config.db.postgresql?.host,
-      port: config.db.postgresql?.port || 5432,
-      user: config.db.postgresql?.user,
-      password: config.db.postgresql?.password,
-      database: config.db.postgresql?.database
-    })
+    const pool = buildPostgresqlPool(config)
     await pool.query('SELECT 1')
     await pool.end()
     return
@@ -61,7 +70,13 @@ const checkDatabase = async (config) => {
     db.close()
     return
   }
-  const sqlite3 = require('sqlite3')
+  let sqlite3 = null
+  try {
+    sqlite3 = require('sqlite3')
+  } catch (err) {
+    console.error('[store] sqlite backend requires sqlite3 build scripts to be allowed (pnpm approve-builds)', err)
+    throw new Error('sqlite 后端不可用：sqlite3 未安装或未完成构建')
+  }
   await new Promise((resolve, reject) => {
     const db = new sqlite3.Database(dbFile, (err) => {
       if (err) return reject(err)
@@ -74,17 +89,19 @@ const checkDatabase = async (config) => {
 const buildStore = async (config) => {
 
   const type = String(config.db?.type || 'sqlite')
+  if (type === 'memory') {
+    const set = new Set()
+    return {
+      getPublicPaths: async () => Array.from(set),
+      setPublicPath: async (p, enabled) => {
+        if (enabled) set.add(p)
+        else set.delete(p)
+      },
+      close: async () => {}
+    }
+  }
   if (type === 'mysql') {
-    const mysql = require('mysql2/promise')
-    const pool = mysql.createPool({
-      host: config.db.mysql?.host,
-      port: config.db.mysql?.port || 3306,
-      user: config.db.mysql?.user,
-      password: config.db.mysql?.password,
-      database: config.db.mysql?.database,
-      waitForConnections: true,
-      connectionLimit: 10
-    })
+    const pool = buildMysqlPool(config)
     await pool.query('CREATE TABLE IF NOT EXISTS public_paths (path VARCHAR(1024) PRIMARY KEY)')
     return {
       getPublicPaths: async () => {
@@ -94,18 +111,14 @@ const buildStore = async (config) => {
       setPublicPath: async (p, enabled) => {
         if (enabled) await pool.query('INSERT INTO public_paths (path) VALUES (?) ON DUPLICATE KEY UPDATE path=VALUES(path)', [p])
         else await pool.query('DELETE FROM public_paths WHERE path=?', [p])
+      },
+      close: async () => {
+        await pool.end()
       }
     }
   }
   if (type === 'postgresql') {
-    const { Pool } = require('pg')
-    const pool = new Pool({
-      host: config.db.postgresql?.host,
-      port: config.db.postgresql?.port || 5432,
-      user: config.db.postgresql?.user,
-      password: config.db.postgresql?.password,
-      database: config.db.postgresql?.database
-    })
+    const pool = buildPostgresqlPool(config)
     await pool.query('CREATE TABLE IF NOT EXISTS public_paths (path TEXT PRIMARY KEY)')
     return {
       getPublicPaths: async () => {
@@ -115,6 +128,9 @@ const buildStore = async (config) => {
       setPublicPath: async (p, enabled) => {
         if (enabled) await pool.query('INSERT INTO public_paths (path) VALUES ($1) ON CONFLICT (path) DO NOTHING', [p])
         else await pool.query('DELETE FROM public_paths WHERE path=$1', [p])
+      },
+      close: async () => {
+        await pool.end()
       }
     }
   }
@@ -137,7 +153,8 @@ const buildStore = async (config) => {
           const { error } = await sb.from('public_paths').delete().eq('path', p)
           if (error) throw error
         }
-      }
+      },
+      close: async () => {}
     }
   }
   const dbFile = path.resolve(rootDir, config.db.sqlite?.file || 'data/sqlite.db')
@@ -154,10 +171,19 @@ const buildStore = async (config) => {
       setPublicPath: async (p, enabled) => {
         if (enabled) insertStmt.run(p)
         else deleteStmt.run(p)
+      },
+      close: async () => {
+        db.close()
       }
     }
   }
-  const sqlite3 = require('sqlite3')
+  let sqlite3 = null
+  try {
+    sqlite3 = require('sqlite3')
+  } catch (err) {
+    console.error('[store] sqlite backend requires sqlite3 build scripts to be allowed (pnpm approve-builds)', err)
+    throw new Error('sqlite 后端不可用：sqlite3 未安装或未完成构建')
+  }
   const db = new sqlite3.Database(dbFile)
   const run = (sql, params = []) => new Promise((resolve, reject) => db.run(sql, params, (err) => (err ? reject(err) : resolve())))
   const all = (sql, params = []) => new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows))))
@@ -170,6 +196,9 @@ const buildStore = async (config) => {
     setPublicPath: async (p, enabled) => {
       if (enabled) await run('INSERT OR REPLACE INTO public_paths (path) VALUES (?)', [p])
       else await run('DELETE FROM public_paths WHERE path=?', [p])
+    },
+    close: async () => {
+      await new Promise((resolve, reject) => db.close((err) => (err ? reject(err) : resolve())))
     }
   }
 }

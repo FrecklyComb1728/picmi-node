@@ -4,6 +4,7 @@ const path = require('node:path')
 const express = require('express')
 const Busboy = require('busboy')
 const { listEntries, ensureDirFor, copyRecursive, removeRecursive } = require('./images')
+const { rootDir } = require('./config')
 const { normalizePath, resolvePathSafe } = require('./paths')
 const { getClientIp, checkWhitelist, requireAuth } = require('./security')
 const { buildStore } = require('./store')
@@ -28,6 +29,14 @@ const sanitizeName = (value) => {
   if (name.includes('/') || name.includes('\\')) return ''
   if (name === '.' || name === '..') return ''
   return name
+}
+
+const normalizeUploadFileName = (value) => {
+  const raw = String(value ?? '')
+  if (!raw) return raw
+  const recovered = Buffer.from(raw, 'latin1').toString('utf8')
+  if (recovered && Buffer.from(recovered, 'utf8').toString('latin1') === raw) return recovered
+  return raw
 }
 
 const normalizeLimits = (config) => {
@@ -59,6 +68,20 @@ const decodeBase64 = (input, maxBytes) => {
     throw err
   }
   return Buffer.from(data, 'base64')
+}
+
+const moveFile = async (from, to) => {
+  try {
+    await fsp.rename(from, to)
+    return
+  } catch (err) {
+    if (err && err.code === 'EXDEV') {
+      await fsp.copyFile(from, to)
+      await fsp.unlink(from)
+      return
+    }
+    throw err
+  }
 }
 
 const start = async (config, storageRoot) => {
@@ -222,7 +245,7 @@ const start = async (config, storageRoot) => {
   app.post('/api/images/upload-base64', wrapAsync(async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const currentPath = normalizePath(req.body?.path || '/')
-    const filename = sanitizeName(req.body?.filename)
+    const filename = sanitizeName(normalizeUploadFileName(req.body?.filename))
     const base64 = req.body?.base64
     const override = String(req.body?.override || '0') === '1'
     if (!filename || !base64) return fail(res, 400, 40001, '参数错误')
@@ -241,6 +264,7 @@ const start = async (config, storageRoot) => {
     if (!requireAuth(req, res, config, false)) return
     const busboy = Busboy({
       headers: req.headers,
+      defParamCharset: 'utf8',
       limits: {
         files: 1,
         fields: limits.uploadFields,
@@ -284,14 +308,14 @@ const start = async (config, storageRoot) => {
         respondFail(400, 40001, '参数错误')
         return
       }
-      fileName = info.filename || ''
+      fileName = normalizeUploadFileName(info.filename || '')
       const safeName = sanitizeName(fileName)
       if (!safeName) {
         file.resume()
         respondFail(400, 40001, '参数错误')
         return
       }
-      const tmpDir = path.join(storageRoot, '.tmp')
+      const tmpDir = path.join(rootDir, 'data', '.tmp')
       ensureDirFor(tmpDir)
         .then(() => {
           tmpPath = path.join(tmpDir, `${Date.now()}-${Math.random().toString(16).slice(2)}`)
@@ -325,7 +349,7 @@ const start = async (config, storageRoot) => {
         const { target } = resolvePathSafe(storageRoot, path.posix.join(currentPath, safeName))
         if (!override && fs.existsSync(target)) return respondFail(409, 40901, '文件已存在')
         await ensureDirFor(path.dirname(target))
-        await fsp.rename(tmpPath, target)
+        await moveFile(tmpPath, target)
         tmpPath = ''
         responded = true
         console.log(`[${new Date().toISOString()}] upload ${normalizePath(path.posix.join(currentPath, safeName))}`)

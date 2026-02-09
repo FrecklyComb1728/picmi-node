@@ -102,13 +102,20 @@ const buildStore = async (config) => {
   }
   if (type === 'mysql') {
     const pool = buildMysqlPool(config)
-    await pool.query('CREATE TABLE IF NOT EXISTS public_paths (path VARCHAR(1024) PRIMARY KEY)')
+    await pool.query('CREATE TABLE IF NOT EXISTS public_paths (path VARCHAR(768) PRIMARY KEY)')
     return {
       getPublicPaths: async () => {
         const [rows] = await pool.query('SELECT path FROM public_paths')
         return rows.map((r) => r.path)
       },
       setPublicPath: async (p, enabled) => {
+        if (String(p).length > 768) {
+          const err = new Error('路径过长')
+          err.status = 400
+          err.code = 40001
+          err.message = '路径过长'
+          throw err
+        }
         if (enabled) await pool.query('INSERT INTO public_paths (path) VALUES (?) ON DUPLICATE KEY UPDATE path=VALUES(path)', [p])
         else await pool.query('DELETE FROM public_paths WHERE path=?', [p])
       },

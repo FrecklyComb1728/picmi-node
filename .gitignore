@@ -3,3 +3,4 @@ data/config.json
 /config.json
 /node_modules
 /uploads
+/.cache

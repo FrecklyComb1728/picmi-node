@@ -3,6 +3,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const express = require('express')
 const Busboy = require('busboy')
+const sharp = require('sharp')
 const { listEntries, ensureDirFor, copyRecursive, removeRecursive } = require('./images')
 const { rootDir } = require('./config')
 const { normalizePath, resolvePathSafe } = require('./paths')
@@ -111,6 +112,16 @@ const start = async (config, storageRoot) => {
       res.setHeader('Cross-Origin-Resource-Policy', 'same-site')
     }
   }))
+  app.use('/blob', express.static(storageRoot, {
+    index: false,
+    dotfiles: 'deny',
+    fallthrough: false,
+    setHeaders: (res) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
+      res.setHeader('Cross-Origin-Resource-Policy', 'same-site')
+    }
+  }))
 
 
 
@@ -152,6 +163,81 @@ const start = async (config, storageRoot) => {
     if (!requireAuth(req, res, config, allowPublic)) return
     const data = await listEntries(storageRoot, currentPath)
     ok(res, data)
+  }))
+
+  const readNumberParam = (value, fallback) => {
+    const num = Number(value)
+    if (!Number.isFinite(num)) return fallback
+    return num
+  }
+
+  const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
+  const cacheRoot = path.resolve(rootDir, '.cache', 'thumbnail')
+
+  const buildThumbRelPath = (relPath) => {
+    return normalizePath(`${relPath}.avif`)
+  }
+
+  const ensureThumb = async (sourceAbs, relPath, maxWidth) => {
+    const thumbRelPath = buildThumbRelPath(relPath)
+    const thumbAbs = resolvePathSafe(cacheRoot, thumbRelPath).target
+    if (fs.existsSync(thumbAbs)) return { thumbAbs, thumbRelPath }
+
+    await ensureDirFor(path.dirname(thumbAbs))
+    const targetWidth = Math.max(1024, Math.floor(Number(maxWidth) || 1600))
+    const targetHeight = targetWidth
+    const quality = 85
+    const effort = 2
+    const meta = await sharp(sourceAbs, { failOnError: false }).metadata()
+    const metaWidth = Number(meta.width)
+    const metaHeight = Number(meta.height)
+    const baseWidth = Number.isFinite(metaWidth) && metaWidth > 0 ? metaWidth : targetWidth
+    const baseHeight = Number.isFinite(metaHeight) && metaHeight > 0 ? metaHeight : targetHeight
+    let scale = 1
+    if (baseWidth > targetWidth) scale = targetWidth / baseWidth
+    else if (baseHeight > targetHeight) scale = targetHeight / baseHeight
+    const newWidth = Math.floor(baseWidth * scale)
+    const newHeight = Math.floor(baseHeight * scale)
+    const out = await sharp(sourceAbs, { failOnError: false })
+      .resize({ width: newWidth, height: newHeight, fit: 'inside', withoutEnlargement: true })
+      .avif({ quality, effort })
+      .toBuffer()
+    const tmp = `${thumbAbs}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    await fsp.writeFile(tmp, out)
+    await fsp.rename(tmp, thumbAbs).catch(async () => {
+      await fsp.unlink(tmp).catch(() => {})
+    })
+    return { thumbAbs, thumbRelPath }
+  }
+
+  app.get('/api/images/thumb', wrapAsync(async (req, res) => {
+    const relPath = normalizePath(req.query.path || '')
+    if (!relPath || relPath === '/') return fail(res, 400, 40001, '参数错误')
+
+    const ext = path.extname(relPath).toLowerCase()
+    if (!imageExts.has(ext)) return fail(res, 404, 40401, '文件不存在')
+
+    const dir = normalizePath(path.posix.dirname(relPath))
+    const allowPublic = await checkPublic(dir)
+    if (!requireAuth(req, res, config, allowPublic)) return
+
+    const { target: sourceAbs } = resolvePathSafe(storageRoot, relPath)
+    if (!fs.existsSync(sourceAbs)) return fail(res, 404, 40401, '文件不存在')
+    const stat = await fsp.stat(sourceAbs).catch(() => null)
+    if (!stat || !stat.isFile()) return fail(res, 404, 40401, '文件不存在')
+
+    const maxWidth = Math.max(1024, Math.min(2048, Math.floor(readNumberParam(req.query.maxWidth, 1600))))
+    const noGenerate = String(req.query.noGenerate || '') === '1'
+    const thumbRelPath = buildThumbRelPath(relPath)
+    const thumbAbs = resolvePathSafe(cacheRoot, thumbRelPath).target
+    if (!fs.existsSync(thumbAbs)) {
+      if (noGenerate) return fail(res, 404, 40401, '文件不存在')
+      const created = await ensureThumb(sourceAbs, relPath, maxWidth)
+      res.type('image/avif')
+      return res.sendFile(created.thumbAbs)
+    }
+    res.type('image/avif')
+    res.sendFile(thumbAbs)
   }))
 
   app.get('/api/images/exists', wrapAsync(async (req, res) => {
@@ -244,6 +330,23 @@ const start = async (config, storageRoot) => {
 
   app.post('/api/images/upload-base64', wrapAsync(async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
+    if (String(req.body?.thumb || '0') === '1') {
+      const originPath = normalizePath(req.body?.originPath || '')
+      if (!originPath || originPath === '/') return fail(res, 400, 40001, '参数错误')
+      const ext = path.extname(originPath).toLowerCase()
+      if (!imageExts.has(ext)) return fail(res, 400, 40001, '参数错误')
+      const base64 = req.body?.base64
+      if (!base64) return fail(res, 400, 40001, '参数错误')
+      const buf = decodeBase64(base64, limits.uploadBase64Bytes)
+      if (!buf) return fail(res, 400, 40001, '参数错误')
+      const thumbRel = buildThumbRelPath(originPath)
+      const { target } = resolvePathSafe(cacheRoot, thumbRel)
+      await ensureDirFor(path.dirname(target))
+      await fsp.writeFile(target, buf)
+      console.log(`[${new Date().toISOString()}] upload thumb base64 ${originPath}`)
+      ok(res, null)
+      return
+    }
     const currentPath = normalizePath(req.body?.path || '/')
     const filename = sanitizeName(normalizeUploadFileName(req.body?.filename))
     const base64 = req.body?.base64
@@ -344,8 +447,25 @@ const start = async (config, storageRoot) => {
         if (fileWrite) await fileWrite
         const currentPath = normalizePath(fields.path || '/')
         const override = String(fields.override || '0') === '1'
+        const isThumb = String(fields.thumb || '0') === '1'
+        const originPath = isThumb ? normalizePath(fields.originPath || '') : ''
         const safeName = sanitizeName(fileName)
         if (!safeName || !tmpPath) return respondFail(400, 40001, '文件为空')
+        if (isThumb) {
+          if (!originPath || originPath === '/') return respondFail(400, 40001, '参数错误')
+          const ext = path.extname(originPath).toLowerCase()
+          if (!imageExts.has(ext)) return respondFail(400, 40001, '参数错误')
+          const thumbRel = buildThumbRelPath(originPath)
+          const { target } = resolvePathSafe(cacheRoot, thumbRel)
+          await ensureDirFor(path.dirname(target))
+          if (fs.existsSync(target)) await fsp.unlink(target).catch(() => {})
+          await moveFile(tmpPath, target)
+          tmpPath = ''
+          responded = true
+          console.log(`[${new Date().toISOString()}] upload thumb ${originPath}`)
+          ok(res, null)
+          return
+        }
         const { target } = resolvePathSafe(storageRoot, path.posix.join(currentPath, safeName))
         if (!override && fs.existsSync(target)) return respondFail(409, 40901, '文件已存在')
         await ensureDirFor(path.dirname(target))

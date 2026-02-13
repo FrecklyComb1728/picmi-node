@@ -3,7 +3,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { normalizePath, resolvePathSafe, toUrlPath } = require('./paths')
 
-const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'])
+const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
 
 const listEntries = async (root, currentPath) => {
   const { target, normalized } = resolvePathSafe(root, currentPath)

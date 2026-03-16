@@ -14,12 +14,12 @@ const { buildCpuSampler, buildTrafficTracker, createStatusPayload } = require('.
 const ok = (res, data, message = 'ok') => res.json({ code: 0, message, data })
 const fail = (res, status, code, message) => res.status(status).json({ code, message, data: null })
 
-const wrapAsync = (handler) => async (req, res) => {
+const wrapAsync = (logger, handler) => async (req, res) => {
   try {
     await handler(req, res)
   } catch (err) {
     if (err && err.status && err.code && err.message) return fail(res, err.status, err.code, err.message)
-    console.error(`[${new Date().toISOString()}] unhandled error ${req.method} ${req.originalUrl}`, err)
+    logger.error({ event: 'unhandled-error', method: req.method, path: req.originalUrl, message: err?.message, stack: err?.stack })
     fail(res, 500, 1, '服务异常')
   }
 }
@@ -85,19 +85,32 @@ const moveFile = async (from, to) => {
   }
 }
 
-const start = async (config, storageRoot) => {
-
+const start = async (config, storageRoot, logger) => {
   const store = await buildStore(config)
   const app = express()
   const limits = normalizeLimits(config)
   const cpuUsage = buildCpuSampler()
   const traffic = buildTrafficTracker()
   const statusPayload = createStatusPayload(config, storageRoot, traffic, cpuUsage)
+  const isDebug = logger.level === 'debug'
+  const logDebug = (event, payload) => {
+    if (!isDebug) return
+    logger.debug({ event, ...payload })
+  }
 
   app.set('trust proxy', config.trustProxy === true)
   app.set('x-powered-by', false)
   app.use((req, res, next) => {
     if (!checkWhitelist(req, config)) return res.sendStatus(403)
+    next()
+  })
+  app.use((req, res, next) => {
+    const startedAt = Date.now()
+    logDebug('http-start', { method: req.method, path: req.originalUrl })
+    res.on('finish', () => {
+      const durationMs = Date.now() - startedAt
+      logger.info({ event: 'http', method: req.method, path: req.originalUrl, status: res.statusCode, durationMs })
+    })
     next()
   })
   app.use(traffic.middleware)
@@ -125,11 +138,15 @@ const start = async (config, storageRoot) => {
 
 
 
-  app.get('/api/health', (_req, res) => ok(res, { status: 'ok' }))
+  app.get('/api/health', (_req, res) => {
+    logDebug('health')
+    ok(res, { status: 'ok' })
+  })
 
 
   app.get('/api/status', (req, res) => {
     if (!requireAuth(req, res, config, false)) return
+    logDebug('status')
     ok(res, statusPayload())
   })
 
@@ -140,7 +157,8 @@ const start = async (config, storageRoot) => {
     res.setHeader('Connection', 'keep-alive')
     res.flushHeaders()
     const ip = getClientIp(req, config)
-    console.log(`[${new Date().toISOString()}] status stream connected ${ip}`)
+    logger.info({ event: 'status-stream-connected', ip })
+    logDebug('status-stream-open', { ip })
     const send = () => {
       res.write(`data: ${JSON.stringify(statusPayload())}\n\n`)
     }
@@ -148,7 +166,8 @@ const start = async (config, storageRoot) => {
     const timer = setInterval(send, 1000)
     req.on('close', () => {
       clearInterval(timer)
-      console.log(`[${new Date().toISOString()}] status stream closed ${ip}`)
+      logger.info({ event: 'status-stream-closed', ip })
+      logDebug('status-stream-close', { ip })
     })
   })
 
@@ -157,10 +176,11 @@ const start = async (config, storageRoot) => {
     return list.includes(p)
   }
 
-  app.get('/api/images/list', wrapAsync(async (req, res) => {
+  app.get('/api/images/list', wrapAsync(logger, async (req, res) => {
     const currentPath = normalizePath(req.query.path || '/')
     const allowPublic = await checkPublic(currentPath)
     if (!requireAuth(req, res, config, allowPublic)) return
+    logDebug('images-list', { path: currentPath, allowPublic })
     const data = await listEntries(storageRoot, currentPath)
     ok(res, data)
   }))
@@ -210,7 +230,7 @@ const start = async (config, storageRoot) => {
     return { thumbAbs, thumbRelPath }
   }
 
-  app.get('/api/images/thumb', wrapAsync(async (req, res) => {
+  app.get('/api/images/thumb', wrapAsync(logger, async (req, res) => {
     const relPath = normalizePath(req.query.path || '')
     if (!relPath || relPath === '/') return fail(res, 400, 40001, '参数错误')
 
@@ -228,33 +248,38 @@ const start = async (config, storageRoot) => {
 
     const maxWidth = Math.max(1024, Math.min(2048, Math.floor(readNumberParam(req.query.maxWidth, 1600))))
     const noGenerate = String(req.query.noGenerate || '') === '1'
+    logDebug('images-thumb', { path: relPath, maxWidth, noGenerate })
     const thumbRelPath = buildThumbRelPath(relPath)
     const thumbAbs = resolvePathSafe(cacheRoot, thumbRelPath).target
     if (!fs.existsSync(thumbAbs)) {
       if (noGenerate) return fail(res, 404, 40401, '文件不存在')
       const created = await ensureThumb(sourceAbs, relPath, maxWidth)
+      logger.debug({ event: 'thumb-generated', relPath, sourceAbs, thumbAbs: created.thumbAbs, maxWidth })
       res.type('image/avif')
       return res.sendFile(created.thumbAbs)
     }
+    logger.debug({ event: 'thumb-cache-hit', relPath, thumbAbs })
     res.type('image/avif')
     res.sendFile(thumbAbs)
   }))
 
-  app.get('/api/images/exists', wrapAsync(async (req, res) => {
+  app.get('/api/images/exists', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const currentPath = normalizePath(req.query.path || '/')
     const filename = String(req.query.filename || '')
     if (!filename) return fail(res, 400, 40001, '参数错误')
+    logDebug('images-exists', { path: currentPath, filename })
     const { target } = resolvePathSafe(storageRoot, path.posix.join(currentPath, filename))
     const exists = fs.existsSync(target)
     ok(res, { exists })
   }))
 
-  app.post('/api/images/mkdir', wrapAsync(async (req, res) => {
+  app.post('/api/images/mkdir', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const name = sanitizeName(req.body?.name)
     if (!name) return fail(res, 400, 40001, '参数错误')
     const currentPath = normalizePath(req.body?.path || '/')
+    logDebug('images-mkdir', { path: currentPath, name })
     const { target } = resolvePathSafe(storageRoot, path.posix.join(currentPath, name))
 
     if (fs.existsSync(target)) return fail(res, 409, 40901, '文件夹已存在')
@@ -262,10 +287,11 @@ const start = async (config, storageRoot) => {
     ok(res, null)
   }))
 
-  app.post('/api/images/delete', wrapAsync(async (req, res) => {
+  app.post('/api/images/delete', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const paths = req.body?.paths
     if (!Array.isArray(paths)) return fail(res, 400, 40001, '参数错误')
+    logDebug('images-delete', { count: paths.length })
     for (const p of paths) {
       const { target } = resolvePathSafe(storageRoot, p)
       await removeRecursive(target)
@@ -273,11 +299,12 @@ const start = async (config, storageRoot) => {
     ok(res, null)
   }))
 
-  app.post('/api/images/copy', wrapAsync(async (req, res) => {
+  app.post('/api/images/copy', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const items = req.body?.items
     if (!Array.isArray(items)) return fail(res, 400, 40001, '参数错误')
     const dest = normalizePath(req.body?.toPath || '/')
+    logDebug('images-copy', { toPath: dest, count: items.length })
     for (const item of items) {
       const from = resolvePathSafe(storageRoot, item.path).target
       const target = resolvePathSafe(storageRoot, path.posix.join(dest, path.basename(from))).target
@@ -286,11 +313,12 @@ const start = async (config, storageRoot) => {
     ok(res, null)
   }))
 
-  app.post('/api/images/move', wrapAsync(async (req, res) => {
+  app.post('/api/images/move', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const items = req.body?.items
     if (!Array.isArray(items)) return fail(res, 400, 40001, '参数错误')
     const dest = normalizePath(req.body?.toPath || '/')
+    logDebug('images-move', { toPath: dest, count: items.length })
     for (const item of items) {
       const from = resolvePathSafe(storageRoot, item.path).target
       const target = resolvePathSafe(storageRoot, path.posix.join(dest, path.basename(from))).target
@@ -300,11 +328,12 @@ const start = async (config, storageRoot) => {
     ok(res, null)
   }))
 
-  app.post('/api/images/rename', wrapAsync(async (req, res) => {
+  app.post('/api/images/rename', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const current = req.body?.path
     const newName = sanitizeName(req.body?.newName)
     if (!current || !newName) return fail(res, 400, 40001, '参数错误')
+    logDebug('images-rename', { path: current, newName })
     const { target } = resolvePathSafe(storageRoot, current)
     const basePath = path.posix.dirname(normalizePath(current))
     const { target: nextTarget } = resolvePathSafe(storageRoot, path.posix.join(basePath, newName))
@@ -312,23 +341,25 @@ const start = async (config, storageRoot) => {
     ok(res, null)
   }))
 
-  app.post('/api/images/public', wrapAsync(async (req, res) => {
+  app.post('/api/images/public', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const current = normalizePath(req.body?.path || '/')
     const list = await store.getPublicPaths()
     const enabled = !list.includes(current)
+    logDebug('images-public', { path: current, enabled })
     await store.setPublicPath(current, enabled)
     ok(res, { enabled })
   }))
 
-  app.get('/api/images/public-status', wrapAsync(async (req, res) => {
+  app.get('/api/images/public-status', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     const current = normalizePath(req.query.path || '/')
+    logDebug('images-public-status', { path: current })
     const list = await store.getPublicPaths()
     ok(res, { enabled: list.includes(current) })
   }))
 
-  app.post('/api/images/upload-base64', wrapAsync(async (req, res) => {
+  app.post('/api/images/upload-base64', wrapAsync(logger, async (req, res) => {
     if (!requireAuth(req, res, config, false)) return
     if (String(req.body?.thumb || '0') === '1') {
       const originPath = normalizePath(req.body?.originPath || '')
@@ -339,11 +370,12 @@ const start = async (config, storageRoot) => {
       if (!base64) return fail(res, 400, 40001, '参数错误')
       const buf = decodeBase64(base64, limits.uploadBase64Bytes)
       if (!buf) return fail(res, 400, 40001, '参数错误')
+      logDebug('images-upload-base64-thumb', { originPath, bytes: buf.length })
       const thumbRel = buildThumbRelPath(originPath)
       const { target } = resolvePathSafe(cacheRoot, thumbRel)
       await ensureDirFor(path.dirname(target))
       await fsp.writeFile(target, buf)
-      console.log(`[${new Date().toISOString()}] upload thumb base64 ${originPath}`)
+      logger.info({ event: 'upload-thumb-base64', originPath, bytes: buf.length })
       ok(res, null)
       return
     }
@@ -357,14 +389,16 @@ const start = async (config, storageRoot) => {
     if (!override && fs.existsSync(target)) return fail(res, 409, 40901, '文件已存在')
     const buf = decodeBase64(base64, limits.uploadBase64Bytes)
     if (!buf) return fail(res, 400, 40001, '参数错误')
+    logDebug('images-upload-base64', { path: normalizePath(path.posix.join(currentPath, String(filename))), bytes: buf.length, override })
     await ensureDirFor(path.dirname(target))
     await fsp.writeFile(target, buf)
-    console.log(`[${new Date().toISOString()}] upload base64 ${normalizePath(path.posix.join(currentPath, String(filename)))}`)
+    logger.info({ event: 'upload-base64', path: normalizePath(path.posix.join(currentPath, String(filename))), bytes: buf.length })
     ok(res, null)
   }))
 
   app.post('/api/images/upload', (req, res) => {
     if (!requireAuth(req, res, config, false)) return
+    logDebug('images-upload-start', { contentType: req.headers['content-type'] })
     const busboy = Busboy({
       headers: req.headers,
       defParamCharset: 'utf8',
@@ -387,7 +421,7 @@ const start = async (config, storageRoot) => {
       tmpPath = ''
       await fsp.unlink(target).catch((err) => {
         if (err && err.code === 'ENOENT') return
-        console.warn(`[${new Date().toISOString()}] cleanup failed`, err)
+        logger.warn({ event: 'upload-cleanup-failed', message: err?.message, stack: err?.stack })
       })
     }
 
@@ -430,9 +464,10 @@ const start = async (config, storageRoot) => {
             writeStream.on('close', resolve)
           })
           file.pipe(writeStream)
+          logDebug('images-upload-stream', { filename: safeName, mime: info.mimeType })
         })
         .catch((err) => {
-          console.error(`[${new Date().toISOString()}] upload init failed`, err)
+          logger.error({ event: 'upload-init-failed', message: err?.message, stack: err?.stack })
           respondFail(500, 1, '服务异常')
         })
     })
@@ -451,6 +486,7 @@ const start = async (config, storageRoot) => {
         const originPath = isThumb ? normalizePath(fields.originPath || '') : ''
         const safeName = sanitizeName(fileName)
         if (!safeName || !tmpPath) return respondFail(400, 40001, '文件为空')
+        logDebug('images-upload-finish', { path: normalizePath(path.posix.join(currentPath, safeName)), override, isThumb, originPath })
         if (isThumb) {
           if (!originPath || originPath === '/') return respondFail(400, 40001, '参数错误')
           const ext = path.extname(originPath).toLowerCase()
@@ -462,7 +498,7 @@ const start = async (config, storageRoot) => {
           await moveFile(tmpPath, target)
           tmpPath = ''
           responded = true
-          console.log(`[${new Date().toISOString()}] upload thumb ${originPath}`)
+          logger.info({ event: 'upload-thumb', originPath })
           ok(res, null)
           return
         }
@@ -472,13 +508,13 @@ const start = async (config, storageRoot) => {
         await moveFile(tmpPath, target)
         tmpPath = ''
         responded = true
-        console.log(`[${new Date().toISOString()}] upload ${normalizePath(path.posix.join(currentPath, safeName))}`)
+        logger.info({ event: 'upload', path: normalizePath(path.posix.join(currentPath, safeName)) })
         ok(res, null)
       } catch (err) {
         const status = err && err.status ? err.status : 500
         const code = err && err.code ? err.code : 1
         const message = err && err.message ? err.message : '服务异常'
-        if (status === 500) console.error(`[${new Date().toISOString()}] upload failed`, err)
+        if (status === 500) logger.error({ event: 'upload-failed', message: err?.message, stack: err?.stack })
         respondFail(status, code, message)
       }
     })
@@ -488,7 +524,7 @@ const start = async (config, storageRoot) => {
 
 
   const server = app.listen(config.port, () => {
-    console.log(`[${new Date().toISOString()}] picmi-node started on ${config.port}`)
+    logger.info({ event: 'server-started', port: config.port })
   })
 
   const originalClose = server.close.bind(server)
@@ -500,7 +536,7 @@ const start = async (config, storageRoot) => {
   const shutdown = async (signal) => {
     if (shuttingDown) return
     shuttingDown = true
-    console.log(`[${new Date().toISOString()}] shutting down (${signal})`)
+    logger.info({ event: 'shutdown', signal })
     if (traffic && typeof traffic.close === 'function') traffic.close()
     await closeHttpServer()
     if (store && typeof store.close === 'function') await store.close()

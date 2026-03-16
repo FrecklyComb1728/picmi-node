@@ -10,6 +10,8 @@ const rootConfigPath = path.join(rootDir, 'config.json')
 const defaultConfig = {
   port: 5409,
   storageRoot: 'uploads',
+  logLevel: 'info',
+  logFile: './logs/app.log',
   auth: { enabled: true, password: '' },
   ipWhitelist: [],
   ipHeader: '',
@@ -68,6 +70,10 @@ const applyEnvOverrides = (config) => {
   if (uploadBase64Bytes) config.limits = { ...(config.limits || {}), uploadBase64Bytes: Number(uploadBase64Bytes) || (config.limits || {}).uploadBase64Bytes }
   const uploadFileBytes = readEnv('PICMI_NODE_UPLOAD_FILE_BYTES')
   if (uploadFileBytes) config.limits = { ...(config.limits || {}), uploadFileBytes: Number(uploadFileBytes) || (config.limits || {}).uploadFileBytes }
+  const logLevel = readEnv('PICMI_NODE_LOG_LEVEL')
+  if (logLevel) config.logLevel = logLevel
+  const logFile = readEnv('PICMI_NODE_LOG_FILE')
+  if (logFile) config.logFile = logFile
   return config
 }
 

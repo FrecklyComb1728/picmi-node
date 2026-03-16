@@ -3,6 +3,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { loadConfig, rootDir, ensureDir } = require('./src/config')
 const { checkDatabase } = require('./src/store')
+const { createLogger } = require('./src/logger')
 
 const checkStorageAccess = async (dir) => {
   await fsp.access(dir, fs.constants.R_OK | fs.constants.W_OK)
@@ -25,7 +26,42 @@ const isDevelopmentStart = () => {
   return false
 }
 
-const normalizeAuth = (config) => {
+const isTruthy = (value) => {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return false
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
+const hasDebugArgInNpmConfigArgv = () => {
+  const raw = String(process.env.npm_config_argv || '').trim()
+  if (!raw) return false
+  try {
+    const parsed = JSON.parse(raw)
+    const list = []
+    if (Array.isArray(parsed?.original)) list.push(...parsed.original)
+    if (Array.isArray(parsed?.cooked)) list.push(...parsed.cooked)
+    return list.some((arg) => {
+      const v = String(arg || '').trim()
+      return v === '--debug' || v === '-d'
+    })
+  } catch {
+    return false
+  }
+}
+
+const isDebugMode = () => {
+  if (process.argv.some((arg) => {
+    const v = String(arg).trim()
+    return v === '--debug' || v === '-d'
+  })) return true
+  if (isTruthy(process.env.PICMI_DEBUG)) return true
+  if (isTruthy(process.env.npm_config_debug)) return true
+  if (String(process.env.npm_config_loglevel || '').trim().toLowerCase() === 'debug') return true
+  if (hasDebugArgInNpmConfigArgv()) return true
+  return false
+}
+
+const normalizeAuth = (config, logger) => {
   const enabled = config.auth?.enabled !== false
   const password = String(config.auth?.password || '').trim()
   if (!enabled) return
@@ -33,43 +69,46 @@ const normalizeAuth = (config) => {
     if (isDevelopmentStart()) {
       if (!didWarnAuthDisabledInDev) {
         didWarnAuthDisabledInDev = true
-        console.warn('\x1b[31m%s\x1b[0m', '>\n> 未配置认证密码(auth.password)，开发模式已自动关闭认证(auth.enabled=false)\n>')
+        logger.warn('未配置认证密码(auth.password)，开发模式已自动关闭认证(auth.enabled=false)')
       }
       config.auth = { ...(config.auth || {}), enabled: false }
       return
     }
-    console.error('\x1b[31m%s\x1b[0m', '>\n> 未配置认证密码(auth.password)，请设置密码或显式关闭认证(auth.enabled=false)\n>')
+    logger.error('未配置认证密码(auth.password)，请设置密码或显式关闭认证(auth.enabled=false)')
     process.exit(1)
   }
   if (password !== 'picmi-node') return
   if (isDevelopmentStart()) {
     if (!didWarnDefaultPassword) {
       didWarnDefaultPassword = true
-      console.warn('\x1b[31m%s\x1b[0m', '>\n> 当前密码为项目默认密码，请确保这不是生产环境！\n>')
+      logger.warn('当前密码为项目默认密码，请确保这不是生产环境')
     }
     return
   }
-  console.error('\x1b[31m%s\x1b[0m', '>\n> 请前往配置文件中更改节点密码(auth.password)\n>')
+  logger.error('请前往配置文件中更改节点密码(auth.password)')
   process.exit(1)
 }
 
 const init = async () => {
   const config = await loadConfig()
-  normalizeAuth(config)
+  if (isDebugMode()) config.logLevel = 'debug'
+  const logger = await createLogger(config)
+  normalizeAuth(config, logger)
   const storageRoot = path.resolve(rootDir, config.storageRoot)
   await ensureDir(storageRoot)
   await checkStorageAccess(storageRoot)
   await checkDatabase(config)
-  return { config, storageRoot }
+  logger.info({ event: 'boot', debug: config.logLevel === 'debug', storageRoot, logFile: logger.file, logLevel: logger.level })
+  return { config, storageRoot, logger }
 }
 
 init()
-  .then(({ config, storageRoot }) => {
+  .then(({ config, storageRoot, logger }) => {
     const { start } = require('./src/server')
-    return start(config, storageRoot)
+    return start(config, storageRoot, logger)
   })
   .catch((err) => {
-    console.error('\x1b[31m%s\x1b[0m', err)
+    console.error(err)
     process.exit(1)
   })
 

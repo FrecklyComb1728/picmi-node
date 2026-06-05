@@ -5,3 +5,5 @@ data/config.json
 /uploads
 /.cache
 /logs
+ecosystem.config.js
+webhook.json

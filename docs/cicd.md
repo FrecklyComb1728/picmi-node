@@ -27,7 +27,7 @@ sudo chmod +x /usr/local/bin/webhook
 ### 2. 首次部署
 
 ```bash
-cd /www/wwwroot
+cd /opt
 git clone https://github.com/FrecklyComb1728/picmi-node.git
 cd picmi-node
 
@@ -51,13 +51,13 @@ pm2 startup
 
 设置权限：
 ```bash
-chmod +x /www/wwwroot/picmi-node/deploy.sh
+chmod +x /opt/picmi-node/deploy.sh
 ```
 
 ### 4. Webhook 配置
 
 ```bash
-cd /www/wwwroot/picmi-node
+cd /opt/picmi-node
 cp webhook.example.json webhook.json
 ```
 
@@ -81,14 +81,13 @@ After=network.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/www/wwwroot/picmi-node
-ExecStart=/usr/local/bin/webhook -hooks /www/wwwroot/picmi-node/webhook.json -port 9002
+WorkingDirectory=/opt/picmi-node
+ExecStart=/usr/local/bin/webhook \
+  -hooks /opt/picmi-node/webhook.json \
+  -port 9000 \
 Restart=always
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/
 
 [Install]
 WantedBy=multi-user.target
@@ -105,8 +104,7 @@ sudo systemctl status webhook-picmi-node
 ### 6. 开放端口
 
 ```bash
-sudo ufw allow 9002/tcp
-sudo ufw allow from 140.82.112.0/20 to any port 9002 proto tcp
+sudo ufw allow 9000/tcp
 ```
 
 ### 7. GitHub Webhook
@@ -115,7 +113,7 @@ sudo ufw allow from 140.82.112.0/20 to any port 9002 proto tcp
 
 | 字段 | 值 |
 |------|-----|
-| Payload URL | `http://服务器IP:9002/hooks/deploy` |
+| Payload URL | `http://服务器IP:9000/hooks/deploy` |
 | Content type | `application/json` |
 | Secret | 与 `webhook.json` 一致 |
 | Events | Just the `push` event |
@@ -125,7 +123,7 @@ sudo ufw allow from 140.82.112.0/20 to any port 9002 proto tcp
 ```bash
 sudo journalctl -u webhook-picmi-node -f
 pm2 status
-tail -f /www/wwwroot/picmi-node/logs/deploy.log
+tail -f /opt/picmi-node/logs/deploy.log
 ```
 
 ---
@@ -151,4 +149,4 @@ git config --global url."https://gh.1s.fan/".insteadOf https://github.com/
 | webhook 不触发 | `journalctl -u webhook-picmi-node -f`，检查端口开放和 GitHub IP 可达 |
 | 部署失败 | `cat logs/deploy.log`，确认 git fetch 成功、权限正确 |
 | PM2 reload 失败 | `pm2 logs picmi-node`，确认 `index.js` 正常 listen |
-| 端口 9002 不通 | 云服务商安全组是否放行 |
+| 端口 9000 不通 | 云服务商安全组是否放行 |

@@ -85,13 +85,17 @@ WorkingDirectory=/opt/picmi-node
 ExecStart=/usr/local/bin/webhook \
   -hooks /opt/picmi-node/webhook.json \
   -port 9000 \
-  -urlprefix ""
 Restart=always
 NoNewPrivileges=yes
 PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
+```
+
+如果需要更改 URL 前缀（如 `/webhook`），请在 `ExecStart` 中添加 `-urlprefix "/webhook"`。
+```ini
+  -urlprefix "/webhook"
 ```
 
 启用：
